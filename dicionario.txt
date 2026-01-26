@@ -1,0 +1,6 @@
+PMB-001 - CPF não informado ao executar o script.
+PMB-002 - Falha ao autenticar na API PayMobi.
+PMB-003 - Token JWT não encontrado na resposta da API PayMobi.
+PMB-004 - Falha ao consultar boletos na API PayMobi.
+PMB-005 - Falha ao gravar arquivos de saída (boletos/link).
+PMB-999 - Erro inesperado durante a execução.
