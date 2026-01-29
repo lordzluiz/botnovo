@@ -66,7 +66,13 @@ export async function iniciarWhatsApp(options = {}) {
       }
     }
 
-    onConnectionUpdate?.(update, sock);
+    if (onConnectionUpdate) {
+      try {
+        onConnectionUpdate(update, sock);
+      } catch (err) {
+        logErro("PMB-021", "Erro ao processar callback de conexão.", err);
+      }
+    }
   });
 
   return sock;
