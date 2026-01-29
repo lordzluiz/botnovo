@@ -8,15 +8,25 @@ import qrcode from "qrcode-terminal";
 
 let reconectando = false;
 
+function criarErrorId(codigo) {
+  const random = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `ERR-${codigo}-${Date.now().toString(36).toUpperCase()}-${random}`;
+}
+
 function logErro(codigo, mensagem, err) {
   const payload = {
+    timestamp: new Date().toISOString(),
     level: "error",
-    code: codigo,
+    error_code: codigo,
+    error_id: criarErrorId(codigo),
     message: mensagem
   };
 
   if (err) {
-    payload.error = err?.message || String(err);
+    payload.error = {
+      type: err?.name || "Error",
+      message: err?.message || String(err)
+    };
   }
 
   console.error(JSON.stringify(payload));
