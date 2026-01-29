@@ -54,6 +54,20 @@ function registrarDesbloqueio(cpf) {
 const fila = [];
 let processando = false;
 
+function logErro(codigo, mensagem, err) {
+  const payload = {
+    level: "error",
+    code: codigo,
+    message: mensagem
+  };
+
+  if (err) {
+    payload.error = err?.message || String(err);
+  }
+
+  console.error(JSON.stringify(payload));
+}
+
 async function adicionarFila(fn) {
   fila.push(fn);
   if (!processando) processarFila();
@@ -66,7 +80,7 @@ async function processarFila() {
     try {
       await job();
     } catch (err) {
-      console.error("❌ Erro em job:", err);
+      logErro("PMB-011", "Erro em job da fila de processamento.", err);
     }
   }
   processando = false;
@@ -118,174 +132,182 @@ async function tratarNenhumaCobrancaAtiva(cpf, sock, msg) {
 const estado = {};
 
 async function iniciarBot() {
-  const sock = await iniciarWhatsApp();
-
   let automacoesIniciadas = false;
+  const configurarSocket = (sock) => {
+    sock.ev.on("connection.update", (update) => {
+      const { connection } = update;
 
-  sock.ev.on("connection.update", (update) => {
-    const { connection } = update;
-
-    if (connection === "open" && !automacoesIniciadas) {
-      automacoesIniciadas = true;
-      console.log("🤖 Bot conectado e pronto!");
-      setTimeout(() => {
-        iniciarNotificacoesDiarias(sock);
-        iniciarRechecagem24h();
-      }, 15000);
-    }
-  });
-
-  sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify") return;
-
-    for (const msg of messages) {
-      if (!msg.message || msg.key.fromMe) continue;
-
-      const from = msg.key.remoteJid;
-      if (!from) continue;
-
-      if (from.endsWith("@g.us")) continue;
-
-      const rawText = getMessageText(msg.message).trim();
-      const text = rawText.toLowerCase();
-
-      // ------------------ MENU PRINCIPAL ------------------
-      if (/^(oi|olá|ola|menu)$/i.test(text)) {
-        estado[from] = "menu_principal";
-        await sendText(
-          sock,
-          from,
-          `👋 Olá *${msg.pushName || "cliente"}*, bem-vindo à *${EMPRESA_NOME}*!  \n\n` +
-            `Escolha uma opção:\n` +
-            `1️⃣ - 👥 Atendimento  \n` +
-            `2️⃣ - 💸 Segunda via de boleto  \n` +
-            `3️⃣ - 🔓 Desbloqueio de Confiança  \n` +
-            `0️⃣ - 🚪 Sair`,
-          msg
-        );
-        continue;
-      }
-
-      // ------------------ OPÇÃO 1 - ATENDIMENTO ------------------
-      if (/^1$/.test(text)) {
-        await sendText(
-          sock,
-          from,
-          `📞 Clique para falar com o atendimento: wa.me/${NUMERO_ATENDIMENTO}`,
-          msg
-        );
-        estado[from] = null;
-        continue;
-      }
-
-      if (/^2$/.test(text)) {
-        estado[from] = "cpf_boleto";
-        await sendText(sock, from, "💳 Digite o *CPF do titular* (somente números).", msg);
-        continue;
-      }
-
-      if (/^3$/.test(text)) {
-        estado[from] = "cpf_desbloqueio";
-        await sendText(sock, from, "🔓 Digite o *CPF do titular* (somente números).", msg);
-        continue;
-      }
-
-      if (/^0$/.test(text)) {
-        await sendText(sock, from, "👋 Até mais! Digite *menu* para começar novamente.", msg);
-        estado[from] = null;
-        continue;
-      }
-
-      // ========== OPÇÃO 2: BOLETOS ==========
-      if (estado[from] === "cpf_boleto") {
-        if (!/^\d{11}$/.test(rawText)) {
-          await sendText(sock, from, "⚠️ CPF inválido. Digite apenas 11 números.", msg);
-          continue;
-        }
-
-        const cpf = rawText;
-        estado[from] = "aguardando";
-        await sendText(
-          sock,
-          from,
-          `🔎 CPF *${cpf}* recebido. Estou buscando seus boletos...`,
-          msg
-        );
-
-        adicionarFila(async () => {
+      if (connection === "open" && !automacoesIniciadas) {
+        automacoesIniciadas = true;
+        console.log("🤖 Bot conectado e pronto!");
+        setTimeout(() => {
           try {
-            await execAsync(`node "${ROBOT_BOLETO}" ${cpf}`, { timeout: 90000 });
-
-            const jsonPath = path.resolve(PASTA_BOLETOS, "boletos.json");
-            if (!fs.existsSync(jsonPath)) {
-              await sendText(sock, from, "⚠️ Nenhum boleto encontrado para este CPF.", msg);
-              estado[from] = "menu_principal";
-              return;
-            }
-
-            const boletos = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
-            const boletosFiltrados = boletos.filter((b) => (b.cpf || "").replace(/\D/g, "") === cpf);
-
-            const hoje = new Date();
-            const mesAtual = hoje.getMonth();
-            const anoAtual = hoje.getFullYear();
-
-            const atrasados = [];
-            const mesAtualBoletos = [];
-            const proximoMes = [];
-
-            for (const b of boletosFiltrados) {
-              const d = new Date(b.dueDate);
-              const link = b.boletoLink || b.boletoUrl || null;
-              const modelo = b.model || b.imeiModel || "Aparelho";
-              const valor = b.value || b.valor || "-";
-              const venc = toBRDate(b.dueDate);
-
-              if (statusEmAberto(b.status)) {
-                if (d < hoje) atrasados.push({ venc, modelo, valor, link });
-                else if (d.getMonth() === mesAtual && d.getFullYear() === anoAtual)
-                  mesAtualBoletos.push({ venc, modelo, valor, link });
-                else if (d.getMonth() === mesAtual + 1 && d.getFullYear() === anoAtual)
-                  proximoMes.push({ venc, modelo, valor, link });
-              }
-            }
-
-            let resposta = "";
-            if (atrasados.length) {
-              resposta += "🚨 *Boletos em atraso:*\n";
-              atrasados.forEach((b) => {
-                resposta += `📅 ${b.venc} | ${b.modelo} | R$${b.valor}\n${
-                  b.link ? "🔗 " + b.link : "⚠️ Link indisponível"
-                }\n\n`;
-              });
-            }
-            if (mesAtualBoletos.length) {
-              resposta += "📆 *Boleto deste mês:*\n";
-              mesAtualBoletos.forEach((b) => {
-                resposta += `🗓️ Venc: ${b.venc} | ${b.modelo} | R$${b.valor}\n${
-                  b.link ? "🔗 " + b.link : "⚠️ Link indisponível"
-                }\n\n`;
-              });
-            }
-            if (proximoMes.length) {
-              resposta += "🔔 *Boleto do próximo mês já disponível:*\n";
-              proximoMes.forEach((b) => {
-                resposta += `📆 ${b.venc} | ${b.modelo} | R$${b.valor}\n${
-                  b.link ? "🔗 " + b.link : "⚠️ Link indisponível"
-                }\n\n`;
-              });
-            }
-
-            await sendText(sock, from, resposta.trim() || "✅ Nenhum boleto em aberto no momento.", msg);
+            iniciarNotificacoesDiarias(sock);
+            iniciarRechecagem24h();
           } catch (err) {
-            console.error("❌ Erro boleto:", err);
-            await sendText(sock, from, "⚠️ Ocorreu um erro ao buscar boletos.", msg);
-          } finally {
-            estado[from] = "menu_principal";
+            logErro("PMB-013", "Erro ao iniciar automações após conexão.", err);
           }
-        });
-        continue;
+        }, 15000);
       }
+    });
+
+    sock.ev.on("messages.upsert", async ({ messages, type }) => {
+      if (type !== "notify") return;
+
+      try {
+        for (const msg of messages) {
+          if (!msg.message || msg.key.fromMe) continue;
+
+          const from = msg.key.remoteJid;
+          if (!from) continue;
+
+          if (from.endsWith("@g.us")) continue;
+
+          const rawText = getMessageText(msg.message).trim();
+          const text = rawText.toLowerCase();
+
+          // ------------------ MENU PRINCIPAL ------------------
+          if (/^(oi|olá|ola|menu)$/i.test(text)) {
+            estado[from] = "menu_principal";
+            await sendText(
+              sock,
+              from,
+              `👋 Olá *${msg.pushName || "cliente"}*, bem-vindo à *${EMPRESA_NOME}*!  \n\n` +
+                `Escolha uma opção:\n` +
+                `1️⃣ - 👥 Atendimento  \n` +
+                `2️⃣ - 💸 Segunda via de boleto  \n` +
+                `3️⃣ - 🔓 Desbloqueio de Confiança  \n` +
+                `0️⃣ - 🚪 Sair`,
+              msg
+            );
+            continue;
+          }
+
+          // ------------------ OPÇÃO 1 - ATENDIMENTO ------------------
+          if (/^1$/.test(text)) {
+            await sendText(
+              sock,
+              from,
+              `📞 Clique para falar com o atendimento: wa.me/${NUMERO_ATENDIMENTO}`,
+              msg
+            );
+            estado[from] = null;
+            continue;
+          }
+
+          if (/^2$/.test(text)) {
+            estado[from] = "cpf_boleto";
+            await sendText(sock, from, "💳 Digite o *CPF do titular* (somente números).", msg);
+            continue;
+          }
+
+          if (/^3$/.test(text)) {
+            estado[from] = "cpf_desbloqueio";
+            await sendText(sock, from, "🔓 Digite o *CPF do titular* (somente números).", msg);
+            continue;
+          }
+
+          if (/^0$/.test(text)) {
+            await sendText(sock, from, "👋 Até mais! Digite *menu* para começar novamente.", msg);
+            estado[from] = null;
+            continue;
+          }
+
+          // ========== OPÇÃO 2: BOLETOS ==========
+          if (estado[from] === "cpf_boleto") {
+            if (!/^\d{11}$/.test(rawText)) {
+              await sendText(sock, from, "⚠️ CPF inválido. Digite apenas 11 números.", msg);
+              continue;
+            }
+
+            const cpf = rawText;
+            estado[from] = "aguardando";
+            await sendText(
+              sock,
+              from,
+              `🔎 CPF *${cpf}* recebido. Estou buscando seus boletos...`,
+              msg
+            );
+
+            adicionarFila(async () => {
+              try {
+                await execAsync(`node "${ROBOT_BOLETO}" ${cpf}`, { timeout: 90000 });
+
+                const jsonPath = path.resolve(PASTA_BOLETOS, "boletos.json");
+                if (!fs.existsSync(jsonPath)) {
+                  await sendText(sock, from, "⚠️ Nenhum boleto encontrado para este CPF.", msg);
+                  estado[from] = "menu_principal";
+                  return;
+                }
+
+                const boletos = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+                const boletosFiltrados = boletos.filter((b) => (b.cpf || "").replace(/\D/g, "") === cpf);
+
+                const hoje = new Date();
+                const mesAtual = hoje.getMonth();
+                const anoAtual = hoje.getFullYear();
+
+                const atrasados = [];
+                const mesAtualBoletos = [];
+                const proximoMes = [];
+
+                for (const b of boletosFiltrados) {
+                  const d = new Date(b.dueDate);
+                  const link = b.boletoLink || b.boletoUrl || null;
+                  const modelo = b.model || b.imeiModel || "Aparelho";
+                  const valor = b.value || b.valor || "-";
+                  const venc = toBRDate(b.dueDate);
+
+                  if (statusEmAberto(b.status)) {
+                    if (d < hoje) atrasados.push({ venc, modelo, valor, link });
+                    else if (d.getMonth() === mesAtual && d.getFullYear() === anoAtual)
+                      mesAtualBoletos.push({ venc, modelo, valor, link });
+                    else if (d.getMonth() === mesAtual + 1 && d.getFullYear() === anoAtual)
+                      proximoMes.push({ venc, modelo, valor, link });
+                  }
+                }
+
+                let resposta = "";
+                if (atrasados.length) {
+                  resposta += "🚨 *Boletos em atraso:*\n";
+                  atrasados.forEach((b) => {
+                    resposta += `📅 ${b.venc} | ${b.modelo} | R$${b.valor}\n${
+                      b.link ? "🔗 " + b.link : "⚠️ Link indisponível"
+                    }\n\n`;
+                  });
+                }
+                if (mesAtualBoletos.length) {
+                  resposta += "📆 *Boleto deste mês:*\n";
+                  mesAtualBoletos.forEach((b) => {
+                    resposta += `🗓️ Venc: ${b.venc} | ${b.modelo} | R$${b.valor}\n${
+                      b.link ? "🔗 " + b.link : "⚠️ Link indisponível"
+                    }\n\n`;
+                  });
+                }
+                if (proximoMes.length) {
+                  resposta += "🔔 *Boleto do próximo mês já disponível:*\n";
+                  proximoMes.forEach((b) => {
+                    resposta += `📆 ${b.venc} | ${b.modelo} | R$${b.valor}\n${
+                      b.link ? "🔗 " + b.link : "⚠️ Link indisponível"
+                    }\n\n`;
+                  });
+                }
+
+                await sendText(
+                  sock,
+                  from,
+                  resposta.trim() || "✅ Nenhum boleto em aberto no momento.",
+                  msg
+                );
+              } catch (err) {
+                logErro("PMB-014", "Erro ao buscar boletos.", err);
+                await sendText(sock, from, "⚠️ Ocorreu um erro ao buscar boletos.", msg);
+              } finally {
+                estado[from] = "menu_principal";
+              }
+            });
+            continue;
+          }
 
       // ========== OPÇÃO 3: DESBLOQUEIO ==========
       if (estado[from] === "cpf_desbloqueio") {
@@ -378,7 +400,7 @@ async function iniciarBot() {
               );
             }
           } catch (err) {
-            console.error("❌ Erro desbloqueio:", err.message);
+            logErro("PMB-015", "Erro ao processar desbloqueio.", err);
             await sendText(
               sock,
               from,
@@ -394,7 +416,20 @@ async function iniciarBot() {
 
       await sendText(sock, from, "🤖 Não entendi. Digite *menu* para ver as opções novamente.", msg);
     }
+    } catch (err) {
+      logErro("PMB-012", "Erro no processamento de mensagens.", err);
+    }
   });
+  };
+
+  const sock = await iniciarWhatsApp({
+    onReconnect: (novoSock) => {
+      console.log("🔄 Reconectado com Baileys. Reinicializando listeners...");
+      configurarSocket(novoSock);
+    }
+  });
+
+  configurarSocket(sock);
 }
 
 // ======================================================================
@@ -576,11 +611,11 @@ async function iniciarNotificacoesDiarias(sock) {
           salvarSentLog();
           console.log(`✅ Enviado (${tipo}) p/ ${nome} (${numeroWhats})`);
         } catch (err) {
-          console.error("⚠️ Erro ao enviar mensagem:", err.message);
+          logErro("PMB-016", "Erro ao enviar mensagem de notificação automática.", err);
         }
       }
     } catch (err) {
-      console.error("⚠️ Erro nas notificações automáticas:", err.message);
+      logErro("PMB-017", "Erro nas notificações automáticas.", err);
     } finally {
       notificando = false;
     }
@@ -683,16 +718,16 @@ async function iniciarRechecagem24h() {
               console.log(`💣 Bloqueio reativado com sucesso para CPF ${cpf}`);
             })
             .catch((err) => {
-              console.error(`⚠️ Falha ao reativar bloqueio CPF ${cpf}:`, err.message);
+              logErro("PMB-018", `Falha ao reativar bloqueio CPF ${cpf}.`, err);
             });
         } catch (erroCpf) {
-          console.error(`⚠️ Erro ao processar CPF ${cpf}:`, erroCpf.message);
+          logErro("PMB-019", `Erro ao processar CPF ${cpf} na rechecagem 24h.`, erroCpf);
         }
       }
 
       if (alterou) salvarHistorico();
     } catch (err) {
-      console.error("⚠️ Erro na rechecagem 24h:", err.message);
+      logErro("PMB-020", "Erro na rechecagem 24h.", err);
     } finally {
       rechecando = false;
     }
