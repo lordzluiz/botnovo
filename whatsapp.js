@@ -6,7 +6,24 @@ import makeWASocket, {
 import Pino from "pino";
 import qrcode from "qrcode-terminal";
 
-export async function iniciarWhatsApp() {
+let reconectando = false;
+
+function logErro(codigo, mensagem, err) {
+  const payload = {
+    level: "error",
+    code: codigo,
+    message: mensagem
+  };
+
+  if (err) {
+    payload.error = err?.message || String(err);
+  }
+
+  console.error(JSON.stringify(payload));
+}
+
+export async function iniciarWhatsApp(options = {}) {
+  const { onReconnect, onConnectionUpdate } = options;
   const { state, saveCreds } = await useMultiFileAuthState("auth_baileys");
 
   const sock = makeWASocket({
@@ -34,10 +51,22 @@ export async function iniciarWhatsApp() {
 
       console.log("⚠️ Conexão fechada. Reconectar:", shouldReconnect);
 
-      if (shouldReconnect) {
-        iniciarWhatsApp();
+      if (shouldReconnect && !reconectando) {
+        reconectando = true;
+        (async () => {
+          try {
+            const novoSock = await iniciarWhatsApp(options);
+            onReconnect?.(novoSock);
+          } catch (err) {
+            logErro("PMB-010", "Falha ao reconectar com Baileys.", err);
+          } finally {
+            reconectando = false;
+          }
+        })();
       }
     }
+
+    onConnectionUpdate?.(update, sock);
   });
 
   return sock;
@@ -52,4 +81,3 @@ export function normalizarNumero(numero) {
 
   return `${n}@s.whatsapp.net`;
 }
-
