@@ -3,4 +3,15 @@ PMB-002 - Falha ao autenticar na API PayMobi.
 PMB-003 - Token JWT não encontrado na resposta da API PayMobi.
 PMB-004 - Falha ao consultar boletos na API PayMobi.
 PMB-005 - Falha ao gravar arquivos de saída (boletos/link).
+PMB-010 - Falha ao reconectar com Baileys.
+PMB-011 - Erro em job da fila de processamento.
+PMB-012 - Erro no processamento de mensagens recebidas.
+PMB-013 - Erro ao iniciar automações após conexão.
+PMB-014 - Erro ao buscar boletos.
+PMB-015 - Erro ao processar desbloqueio.
+PMB-016 - Erro ao enviar mensagem de notificação automática.
+PMB-017 - Erro nas notificações automáticas.
+PMB-018 - Falha ao reativar bloqueio durante rechecagem 24h.
+PMB-019 - Erro ao processar CPF na rechecagem 24h.
+PMB-020 - Erro geral na rechecagem 24h.
 PMB-999 - Erro inesperado durante a execução.
