@@ -418,6 +418,9 @@ async function iniciarBot() {
     } catch (err) {
       logErro("PMB-012", "Erro no processamento de mensagens.", err);
     }
+    } catch (err) {
+      logErro("PMB-012", "Erro no processamento de mensagens.", err);
+    }
   });
   };
 
